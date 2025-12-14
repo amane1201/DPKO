@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DPKO 公式サイト</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Three.jsライブラリの読み込み -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background-color: #000000;
+            font-family: 'Inter', sans-serif;
+            color: white;
+        }
+        canvas {
+            display: block;
+        }
+        /* UIオーバーレイを画面全体に広げ、Flexboxで中央寄せする */
+        #ui-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100vh; /* 画面の高さいっぱい */
+            background: none; /* 背景グラデーションを削除 */
+            pointer-events: none; /* デフォルトでクリックを透過 */
+            
+            /* Flexbox設定: 要素を中央に縦方向に並べる */
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 1rem;
+            z-index: 10;
+        }
+        #loading-message {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 1.2rem;
+            color: #ffd700;
+            animation: pulse 1.5s infinite alternate;
+        }
+        @keyframes pulse {
+            from { opacity: 0.7; }
+            to { opacity: 1.0; }
+        }
+        /* テキストに軽い影をつけて、背景の土星に埋もれないようにする */
+        .text-shadow-lg {
+            text-shadow: 0 0 10px rgba(0, 0, 0, 0.8), 0 0 5px rgba(255, 255, 255, 0.2);
+        }
+    </style>
+</head>
+<body class="bg-black">
+
+    <div id="loading-message">
+        シーンの構築とテクスチャ生成中...
+    </div>
+
+    <!-- UIオーバーレイ: DPKOタイトル、追加テキスト、Discordリンクを画面中央に配置 -->
+    <div id="ui-overlay">
+        
+        <!-- DPKO タイトル (ど真ん中、水色、サンセリフ) -->
+        <h1 class="text-6xl sm:text-8xl font-extrabold tracking-widest text-cyan-400 mb-2 pointer-events-auto text-shadow-lg">
+            DPKO
+        </h1>
+        
+        <!-- 追加テキスト -->
+        <p class="mt-4 mb-8 text-xl sm:text-2xl text-gray-200 font-medium pointer-events-auto text-shadow-lg">
+            星々の向こうへ、未知の領域へ。
+        </p>
+        
+        <!-- Discordリンク (少し下に) -->
+        <a href="https://discord.gg/dpko" target="_blank" 
+           class="flex items-center space-x-3 px-8 py-3 bg-indigo-600 hover:bg-indigo-700 transition duration-300 rounded-full shadow-2xl shadow-indigo-500/50 pointer-events-auto">
+            
+            <!-- Discordアイコン (簡略SVG) -->
+            <svg class="w-6 h-6 fill-current text-white" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path d="M10.125 15.625c.375 0 .625.25.625.625s-.25.625-.625.625c-.375 0-.625-.25-.625-.625s.25-.625.625-.625zm3.75 0c.375 0 .625.25.625.625s-.25.625-.625.625c-.375 0-.625-.25-.625-.625s.25-.625.625-.625zM12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-4.375 12.5c-.625 0-1.25-.625-1.25-1.25s.625-1.25 1.25-1.25h8.75c.625 0 1.25.625 1.25 1.25s-.625 1.25-1.25 1.25H7.625zm-1.875-5.625c0-.625.625-1.25 1.25-1.25h8.75c.625 0 1.25.625 1.25 1.25s-.625 1.25-1.25 1.25H7.625c-.625 0-1.25-.625-1.25-1.25z"/>
+            </svg>
+            <span class="text-white font-bold">Discordに参加</span>
+        </a>
+    </div>
+
+    <script>
+        // グローバル変数の定義
+        let scene, camera, renderer;
+        let saturnGroup;
+        let isDragging = false;
+        let previousMousePosition = { x: 0, y: 0 };
+        const rotationSpeed = 0.003; 
+
+        // -------------------- テクスチャ生成関数 --------------------
+
+        /**
+         * 土星本体の雲の帯をシミュレートするテクスチャを生成（高解像度、線形補間、ノイズ、ぼかしを使用）
+         * @returns {THREE.CanvasTexture}
+         */
+        function createSaturnTexture() {
+            const size = 2048; // 解像度を上げて細かい線を表現
+            const canvas = document.createElement('canvas');
+            canvas.width = size;
+            canvas.height = size / 2;
+            const ctx = canvas.getContext('2d');
+            
+            const imageData = ctx.createImageData(size, size / 2);
+            const data = imageData.data;
+            
+            // 帯の定義: [y-norm (0-1), {R, G, B}, max_noise]
+            const colorStops = [
+                [0.0, { r: 200, g: 180, b: 150 }, 15], // 極付近
+                [0.15, { r: 245, g: 232, b: 216 }, 10], // 明るい帯
+                [0.3, { r: 214, g: 199, b: 154 }, 25], // 濃い帯 1 (ノイズ強)
+                [0.45, { r: 240, g: 220, b: 200 }, 10], // 中間地帯
+                [0.55, { r: 181, g: 164, b: 132 }, 35], // 最も濃く乱れた帯 (ノイズ最大)
+                [0.65, { r: 224, g: 216, b: 194 }, 8], // 赤道（明るくノイズ少なめ）
+                [0.8, { r: 163, g: 146, b: 114 }, 25], // 濃い帯 2
+                [0.9, { r: 245, g: 232, b: 216 }, 10], // 明るい帯
+                [1.0, { r: 200, g: 180, b: 150 }, 15], // 反対の極
+            ];
+            
+            const height = size / 2;
+
+            for (let y = 0; y < height; y++) {
+                const yNorm = y / height;
+                
+                let stop1 = colorStops[0];
+                let stop2 = colorStops[colorStops.length - 1];
+                
+                // 補間ポイントを見つける
+                for (let i = 0; i < colorStops.length - 1; i++) {
+                    if (yNorm >= colorStops[i][0] && yNorm <= colorStops[i+1][0]) {
+                        stop1 = colorStops[i];
+                        stop2 = colorStops[i+1];
+                        break;
+                    }
+                }
+
+                const t = (yNorm - stop1[0]) / (stop2[0] - stop1[0]); // 補間率 (0 to 1)
+
+                // 色とノイズ強度の線形補間
+                const baseColor = {
+                    r: Math.round(stop1[1].r + (stop2[1].r - stop1[1].r) * t),
+                    g: Math.round(stop1[1].g + (stop2[1].g - stop1[1].g) * t),
+                    b: Math.round(stop1[1].b + (stop2[1].b - stop1[1].b) * t),
+                };
+                const maxNoise = Math.round(stop1[2] + (stop2[2] - stop1[2]) * t);
+
+
+                for (let x = 0; x < size; x++) {
+                    const index = (y * size + x) * 4;
+                    
+                    // 各ピクセルにランダムな色ノイズを付加 (大気の乱れをシミュレート)
+                    const rOffset = Math.floor(Math.random() * maxNoise - maxNoise / 2);
+                    const gOffset = Math.floor(Math.random() * maxNoise - maxNoise / 2);
+                    const bOffset = Math.floor(Math.random() * maxNoise - maxNoise / 2);
+
+                    // 色をセット (0-255の範囲に制限)
+                    data[index] = Math.max(0, Math.min(255, baseColor.r + rOffset));
+                    data[index + 1] = Math.max(0, Math.min(255, baseColor.g + gOffset));
+                    data[index + 2] = Math.max(0, Math.min(255, baseColor.b + bOffset));
+                    data[index + 3] = 255; // Alpha
+                }
+            }
+
+            ctx.putImageData(imageData, 0, 0);
+            
+            // **ぼかしの適用 (最終仕上げ)**
+            ctx.filter = 'blur(0.5px)'; // わずかなぼかしを適用
+            ctx.drawImage(canvas, 0, 0, size, height); 
+
+            return new THREE.CanvasTexture(canvas);
+        }
+
+        /**
+         * 輪のバンド構造をシミュレートするテクスチャを生成（高ディテール）
+         * @returns {THREE.CanvasTexture}
+         */
+        function createRingTexture() {
+            const size = 512; 
+            const canvas = document.createElement('canvas');
+            canvas.width = size;
+            canvas.height = size;
+            const ctx = canvas.getContext('2d');
+            
+            // 輪のグラデーションを作成 (中心から外側へ)
+            const ringInnerRadius = 45;
+            const ringOuterRadius = 90;
+            const ringGradient = ctx.createRadialGradient(
+                size / 2, size / 2, ringInnerRadius * (size / 180), 
+                size / 2, size / 2, ringOuterRadius * (size / 180) 
+            );
+            
+            // 輪の構造 (より多くのバンドと色 - C環、B環、カッシーニ、A環をシミュレート)
+            // 0.0 は輪の内側、1.0 は輪の外側
+            
+            // 0.0 - 0.1 C環 (透明で暗い、赤道近く)
+            ringGradient.addColorStop(0.0, 'rgba(150, 150, 150, 0.05)'); 
+            ringGradient.addColorStop(0.05, 'rgba(180, 160, 140, 0.2)'); // 暖かい暗い色
+            ringGradient.addColorStop(0.1, 'rgba(170, 170, 170, 0.4)'); 
+            
+            // 0.1 - 0.4 B環 (最も明るく、幅が広い)
+            ringGradient.addColorStop(0.15, 'rgba(240, 220, 200, 0.95)'); // 非常に明るい白
+            ringGradient.addColorStop(0.3, 'rgba(255, 255, 255, 1.0)'); 
+            ringGradient.addColorStop(0.4, 'rgba(230, 210, 180, 0.9)'); 
+
+            // 0.4 - 0.5 カッシーニの隙間 (暗い/黒い)
+            ringGradient.addColorStop(0.42, 'rgba(50, 50, 50, 0.9)'); 
+            ringGradient.addColorStop(0.48, 'rgba(50, 50, 50, 0.85)');    
+
+            // 0.5 - 1.0 A環 (B環より暗く、青みがかったり灰色がかったりする)
+            ringGradient.addColorStop(0.55, 'rgba(190, 190, 210, 0.7)'); // 青みがかった灰色
+            ringGradient.addColorStop(0.7, 'rgba(210, 210, 220, 0.8)');
+            ringGradient.addColorStop(0.85, 'rgba(150, 150, 160, 0.6)'); 
+
+            // 輪の終わり (透明に戻る)
+            ringGradient.addColorStop(0.98, 'rgba(0, 0, 0, 0.1)'); 
+            ringGradient.addColorStop(1.0, 'rgba(0, 0, 0, 0.0)'); 
+
+            ctx.fillStyle = ringGradient;
+            ctx.fillRect(0, 0, size, size);
+            
+            return new THREE.CanvasTexture(canvas);
+        }
+
+        // -------------------- 3Dシーンの初期設定 --------------------
+        
+        function init() {
+            // シーンの作成
+            scene = new THREE.Scene();
+            
+            // カメラの設定: 遠景を維持 (Z=300)
+            camera = new THREE.PerspectiveCamera(35, window.innerWidth / window.innerHeight, 0.1, 2000);
+            camera.position.z = 300; 
+            
+            // レンダラーの設定
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap; // 影を柔らかくする
+            document.body.appendChild(renderer.domElement);
+            
+            // -------------------- 土星と輪のグループ作成 --------------------
+            saturnGroup = new THREE.Group();
+            
+            // 1. 土星本体の作成
+            const saturnGeometry = new THREE.SphereGeometry(30, 64, 64);
+            
+            // プログラムでテクスチャを生成
+            const saturnColorTexture = createSaturnTexture();
+
+            // マテリアル: StandardMaterialを使用し、リアリティを維持
+            const saturnMaterial = new THREE.MeshStandardMaterial({
+                map: saturnColorTexture, 
+                color: 0xffffff,
+                roughness: 0.95, 
+                metalness: 0.0,
+            });
+            const saturn = new THREE.Mesh(saturnGeometry, saturnMaterial);
+            saturn.receiveShadow = true; 
+            saturn.castShadow = true; 
+            saturnGroup.add(saturn);
+            
+            // 2. 土星の輪の作成
+            const ringInnerRadius = 45;
+            const ringOuterRadius = 90;
+            const ringsGeometry = new THREE.RingGeometry(ringInnerRadius, ringOuterRadius, 128);
+
+            // プログラムで輪のテクスチャを生成
+            const ringTexture = createRingTexture();
+
+            const ringsMaterial = new THREE.MeshStandardMaterial({
+                map: ringTexture,
+                color: 0xffffff,
+                side: THREE.DoubleSide, 
+                transparent: true,
+                opacity: 0.95, 
+                roughness: 0.9, 
+                metalness: 0.0,
+            });
+            
+            const rings = new THREE.Mesh(ringsGeometry, ringsMaterial);
+            rings.rotation.x = Math.PI / 2; 
+            rings.castShadow = true; 
+            
+            saturnGroup.rotation.z = THREE.MathUtils.degToRad(27); // 土星の傾き(27度)
+            saturnGroup.add(rings);
+            
+            // -------------------- 衛星の追加 (Moons) --------------------
+            const moonCount = 4;
+            const moonDistances = [120, 160, 200, 240]; 
+            const moonSizes = [3, 2, 2.5, 1.5]; 
+            
+            const moonGeometry = new THREE.SphereGeometry(1, 16, 16);
+            
+            for (let i = 0; i < moonCount; i++) {
+                const size = moonSizes[i];
+                const distance = moonDistances[i];
+
+                const moonMaterial = new THREE.MeshStandardMaterial({
+                    color: 0xdddddd,
+                    roughness: 0.8,
+                });
+                const moon = new THREE.Mesh(moonGeometry, moonMaterial);
+                moon.scale.set(size, size, size); 
+                
+                // 初期のランダムな位置
+                const theta = Math.random() * Math.PI * 2;
+                
+                moon.position.set(
+                    distance * Math.cos(theta),
+                    Math.sin(theta * 0.5) * distance * 0.1, // Y軸をわずかに傾ける
+                    distance * Math.sin(theta)
+                );
+
+                moon.userData.orbitSpeed = (Math.random() * 0.005) + 0.002;
+                moon.userData.distance = distance;
+                moon.userData.angle = theta;
+                
+                moon.castShadow = true; 
+                saturnGroup.add(moon);
+            }
+
+            scene.add(saturnGroup);
+
+            // -------------------- 光源の追加 (強度を極限まで調整) --------------------
+
+            // 1. 環境光 (Ambient Light): 最低限の全体照明を提供 (強度を下げて陰影を強調)
+            const ambientLight = new THREE.AmbientLight(0x404040, 2.5); 
+            scene.add(ambientLight);
+
+            // 2. 指向性光源 (Directional Light): 太陽光。右下側により薄い影が落ちるように調整
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5); 
+            // 光源を左上奥に配置
+            directionalLight.position.set(-300, 150, 300).normalize();
+            
+            directionalLight.castShadow = true;
+            directionalLight.shadow.mapSize.width = 1024;
+            directionalLight.shadow.mapSize.height = 1024;
+            directionalLight.shadow.camera.near = 1;
+            directionalLight.shadow.camera.far = 400;
+            const d = 150;
+            directionalLight.shadow.camera.left = -d;
+            directionalLight.shadow.camera.right = d;
+            directionalLight.shadow.camera.top = d;
+            directionalLight.shadow.camera.bottom = -d;
+            directionalLight.shadow.bias = -0.0001; 
+            directionalLight.shadow.radius = 2; 
+
+            scene.add(directionalLight);
+
+            // -------------------- 星空の作成 (Particle System) --------------------
+            const starsGeometry = new THREE.BufferGeometry();
+            const starsCount = 5000;
+            const positions = [];
+            for (let i = 0; i < starsCount; i++) {
+                const x = THREE.MathUtils.randFloatSpread( 2500 ); 
+                const y = THREE.MathUtils.randFloatSpread( 2500 );
+                const z = THREE.MathUtils.randFloatSpread( 2500 );
+                positions.push( x, y, z );
+            }
+            starsGeometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            const starsMaterial = new THREE.PointsMaterial({
+                color: 0xffffff,
+                size: 0.5, 
+                sizeAttenuation: true 
+            });
+            const stars = new THREE.Points(starsGeometry, starsMaterial);
+            scene.add(stars);
+
+            // -------------------- イベントリスナー --------------------
+
+            window.addEventListener('resize', onWindowResize, false);
+            const canvasElement = renderer.domElement;
+            
+            canvasElement.addEventListener('mousedown', onDocumentMouseDown, false);
+            canvasElement.addEventListener('mouseup', onDocumentMouseUp, false);
+            canvasElement.addEventListener('mousemove', onDocumentMouseMove, false);
+
+            canvasElement.addEventListener('touchstart', onDocumentTouchStart, false);
+            canvasElement.addEventListener('touchend', onDocumentTouchEnd, false);
+            canvasElement.addEventListener('touchmove', onDocumentTouchMove, false);
+
+            const loadingMessage = document.getElementById('loading-message');
+            if (loadingMessage) loadingMessage.style.display = 'none';
+        }
+
+        /**
+         * アニメーションループ
+         */
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // 衛星の軌道計算
+            saturnGroup.children.forEach(child => {
+                if (child.userData.distance) {
+                    child.userData.angle += child.userData.orbitSpeed;
+                    const distance = child.userData.distance;
+                    // 衛星を輪の面（XY平面）に近い軌道に乗せる
+                    child.position.x = distance * Math.cos(child.userData.angle);
+                    child.position.z = distance * Math.sin(child.userData.angle);
+                    // Y軸の位置を少しずらして立体感を出す
+                    child.position.y = Math.sin(child.userData.angle * 0.5) * distance * 0.1;
+                }
+            });
+
+            // 土星の自動回転
+            saturnGroup.rotation.y += 0.001; 
+            
+            renderer.render(scene, camera);
+        }
+
+        // -------------------- マウス/タッチイベントハンドラ (回転制御) --------------------
+
+        function startDrag(clientX, clientY) {
+            isDragging = true;
+            previousMousePosition = { x: clientX, y: clientY };
+        }
+
+        function endDrag(event) {
+            isDragging = false;
+        }
+
+        function moveDrag(clientX, clientY) {
+            if (isDragging) {
+                const deltaX = clientX - previousMousePosition.x;
+                const deltaY = clientY - previousMousePosition.y;
+
+                saturnGroup.rotation.y += deltaX * rotationSpeed;
+                saturnGroup.rotation.x += deltaY * rotationSpeed;
+
+                previousMousePosition = { x: clientX, y: clientY };
+            }
+        }
+        
+        // --- イベントマッピング ---
+        function onDocumentMouseDown(event) { event.preventDefault(); startDrag(event.clientX, event.clientY); }
+        function onDocumentMouseUp(event) { event.preventDefault(); endDrag(event); }
+        function onDocumentMouseMove(event) { event.preventDefault(); moveDrag(event.clientX, event.clientY); }
+
+        function onDocumentTouchStart(event) { event.preventDefault(); if (event.touches.length === 1) { startDrag(event.touches[0].clientX, event.touches[0].clientY); } }
+        function onDocumentTouchEnd(event) { event.preventDefault(); endDrag(event); }
+        function onDocumentTouchMove(event) { event.preventDefault(); if (event.touches.length === 1) { moveDrag(event.touches[0].clientX, event.touches[0].clientY); } }
+
+        // ページロードが完了してから初期化とアニメーションを開始
+        window.onload = function () {
+            init();
+            animate();
+        };
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+    </script>
+</body>
+</html>
+
+ 
